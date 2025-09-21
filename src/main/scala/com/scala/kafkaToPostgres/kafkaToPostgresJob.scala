@@ -27,7 +27,7 @@ object kafkaToPostgresJob {
       .format("kafka")
       .option("kafka.bootstrap.servers", "localhost:9092")
       .option("subscribe", "personal-info")
-      .option("startingOffsets", "earliest") // or latest
+      .option("startingOffsets", "latest") // or latest
       .load()
 
     val jsonDF = kafkaDF.selectExpr("CAST(value AS STRING) as json")
@@ -42,9 +42,7 @@ object kafkaToPostgresJob {
       .withColumn("ingestion_ts", current_timestamp())
 
     stagedDF.printSchema()
-//    stagedDF.show(false)
-//    stagedDF.show()
-//    System.exit(0)
+
 
     // Postgres connection
     val jdbcUrl = "jdbc:postgresql://localhost:5432/postgres"
@@ -53,18 +51,6 @@ object kafkaToPostgresJob {
     dbProps.setProperty("password", "postgres")
     dbProps.setProperty("driver", "org.postgresql.Driver")
 
-
-//    stagedDF.writeStream
-//      .foreachBatch { (fDF: Dataset[Row], _: Long) =>
-//
-//        println("=== Schema ===")
-//        println(fDF.schema.treeString)
-//        fDF.show(20, truncate = false)
-//
-//      }
-//      .start()
-//      .awaitTermination()
-//    System.exit(0)
 
     stagedDF.writeStream
       .foreachBatch { (finalDF: Dataset[Row], _: Long) =>
@@ -82,16 +68,22 @@ object kafkaToPostgresJob {
 
         val insertDF = spark.sql(
           """
-            |SELECT s.* FROM staging_view s
+            |SELECT s.id as id, s.name as name, s.email as email FROM staging_view s
             |LEFT JOIN master_view m ON s.id = m.id
             |WHERE m.id IS NULL
           """.stripMargin)
+
+        insertDF.show()
+
+        val successfulIds = insertDF.select("id").as[Int].collect().mkString(",")
 
         insertDF.write
           .mode("append")
           .jdbc(jdbcUrl, "master_table", dbProps)
 
-        val successfulIds = insertDF.select("id").as[Int].collect().mkString(",")
+
+        println(s">>> Successful IDs: $successfulIds")
+
         if (successfulIds.nonEmpty) {
           val conn = DriverManager.getConnection(jdbcUrl, dbProps)
           val stmt = conn.createStatement()
